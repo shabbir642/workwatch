@@ -16,6 +16,12 @@ DEFAULT_CONFIG = {
     "overtime_enabled": True,
     "inactive_threshold_minutes": 10,
     "archive_email": "",
+    # `recap` command settings ----------------------------------------
+    "recap_repos": [],            # explicit dirs to scan (do NOT auto-scan $HOME)
+    "recap_author": "",           # git --author filter; "" → git config user.email
+    "recap_default_window": "24h",
+    "recap_include_claude": True,  # include the Claude Code "Explored" bucket
+    "recap_ai_review": False,      # reserved: Claude-API verdict instead of rules
 }
 
 

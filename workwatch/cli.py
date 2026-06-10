@@ -351,6 +351,76 @@ def cmd_archive(args: list[str]):
     print(f"  \033[1;32m✅ {msg}\033[0m\n")
 
 
+def cmd_recap(args: list[str]):
+    """Time-windowed 'what I did' summary (git + Claude sessions), emailed."""
+    from workwatch.recap import run_recap
+
+    config = load_config()
+    window = config.get("recap_default_window", "24h")
+    email = config.get("archive_email", "") or ""
+    author = config.get("recap_author", "") or ""
+    include_claude = config.get("recap_include_claude", True)
+    repos: list[str] = []
+    dry_run = False
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--email" and i + 1 < len(args):
+            email = args[i + 1]
+            i += 2
+            continue
+        if a == "--repo" and i + 1 < len(args):
+            repos.append(args[i + 1])
+            i += 2
+            continue
+        if a == "--dry-run":
+            dry_run = True
+            i += 1
+            continue
+        if a == "--no-claude":
+            include_claude = False
+            i += 1
+            continue
+        if not a.startswith("-"):
+            window = a
+            i += 1
+            continue
+        print(f"  \033[1;31m❌ Unknown argument: {a}\033[0m\n")
+        sys.exit(1)
+
+    if not repos:
+        repos = [os.path.expanduser(p) for p in config.get("recap_repos", []) or []]
+
+    if not repos:
+        print(f"\n  \033[1;31m❌ No repos to scan.\033[0m")
+        print(f"  \033[0;90mSet 'recap_repos' in ~/.workwatch.json or pass --repo DIR.\033[0m\n")
+        sys.exit(1)
+
+    if not email and not dry_run:
+        print(f"\n  \033[1;31m❌ No recipient email configured.\033[0m")
+        print(f"  \033[0;90mSet 'archive_email' in ~/.workwatch.json or pass --email.\033[0m\n")
+        sys.exit(1)
+
+    if dry_run:
+        print(f"\n  \033[1;36m⏱  Recap preview (last {window})\033[0m\n")
+    else:
+        print(f"\n  \033[1;36m⏱  Building recap (last {window}) → {email}\033[0m")
+
+    ok, msg = run_recap(window, repos, author, email,
+                        dry_run=dry_run, include_claude=include_claude)
+    if not ok:
+        print(f"\n  \033[1;31m❌ {msg}\033[0m\n")
+        sys.exit(1)
+
+    if dry_run:
+        print(msg)
+        print()
+        return
+
+    print(f"  \033[1;32m✅ {msg}\033[0m\n")
+
+
 def cmd_version():
     """Show version."""
     print(f"WorkWatch v{VERSION}")
@@ -372,6 +442,9 @@ def cmd_help():
   workwatch archive      Email + delete last month's records
   workwatch archive --month YYYY-MM [--email addr] [--dry-run]
                          Archive a specific month (or preview)
+  workwatch recap [WINDOW] [--repo DIR] [--email addr] [--dry-run] [--no-claude]
+                         "What I did" summary (git + Claude sessions), emailed.
+                         WINDOW: 24h (default), 90m, 7d, 2w, 1mo
   workwatch version      Show version
   workwatch help         Show this help message
 
@@ -404,6 +477,8 @@ def main():
         cmd_log(args[1:])
     elif args[0] == "archive":
         cmd_archive(args[1:])
+    elif args[0] == "recap":
+        cmd_recap(args[1:])
     elif args[0] == "version":
         cmd_version()
     elif args[0] in ("help", "--help", "-h"):
