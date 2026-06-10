@@ -52,7 +52,12 @@ def collect_repo(repo: str, since: str, author: str = "") -> dict:
     Returns a dict with the repo's finished/in-progress state, or a dict with
     a "skipped" note if the path isn't a usable git repo.
     """
+    # Resolve the configured path. Bare/relative names (e.g. "jobs-api-es")
+    # are resolved against $HOME rather than the CWD, since recap_repos are
+    # expected to be home-dir clones and `workwatch recap` may run anywhere.
     repo_path = Path(repo).expanduser()
+    if not repo_path.is_absolute():
+        repo_path = Path.home() / repo_path
     repo = str(repo_path)
     name = repo_path.name or repo
 
@@ -135,9 +140,17 @@ def collect_repos(repos: list[str], since: str, author: str = "") -> list[dict]:
     return [collect_repo(r, since, author) for r in repos]
 
 
+# Untracked-only repos with fewer than this many untracked files are treated
+# as clean — a lone stray file (.DS_Store, a scratch note) shouldn't flag a
+# repo as dirty. Staged/modified changes always count, regardless of this.
+UNTRACKED_FLOOR = 2
+
+
 def repo_is_dirty(repo: dict) -> bool:
     d = repo.get("dirty", {})
-    return bool(d.get("staged") or d.get("modified") or d.get("untracked"))
+    if d.get("staged") or d.get("modified"):
+        return True
+    return d.get("untracked", 0) >= UNTRACKED_FLOOR
 
 
 def repo_dirty_count(repo: dict) -> int:

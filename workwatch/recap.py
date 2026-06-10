@@ -77,6 +77,10 @@ def build_recap(window: str, repos: list[str], author: str = "",
                 if not include_claude
                 else claude_sessions.collect_sessions(since, now))
 
+    # Count only substantive sessions (those with tool use) — pure-chat
+    # sessions are dropped from the recap, so they shouldn't inflate totals.
+    substantive_sessions = [s for s in sessions["sessions"] if s.get("tools")]
+
     usable = [r for r in repo_data if not r.get("skipped")]
     total_commits = sum(len(r["finished"]) for r in usable)
     total_unpushed = sum(r["unpushed"] for r in usable)
@@ -98,7 +102,7 @@ def build_recap(window: str, repos: list[str], author: str = "",
             "dirty_repos": len(dirty_repos),
             "repos_touched": len(repos_with_commits) + len(dirty_repos),
             "repos_scanned": len(repo_data),
-            "sessions": len(sessions["sessions"]),
+            "sessions": len(substantive_sessions),
         },
     }
 
@@ -180,6 +184,85 @@ def _fmt_time(iso: str | None) -> str:
         return iso[:16]
 
 
+def repo_has_updates(repo: dict) -> bool:
+    """True if a repo has anything worth showing in the recap body.
+
+    "Worth showing" = activity in the window (commits) or live risk
+    (uncommitted changes, unpushed commits, stashes). Idle repos — and
+    skipped / non-git ones — return False so they're hidden from the mail
+    rather than cluttering it with empty rows.
+    """
+    if repo.get("skipped"):
+        return False
+    return bool(
+        repo["finished"]
+        or repo_is_dirty(repo)
+        or repo["unpushed"]
+        or repo["stashes"]
+    )
+
+
+def _visible_notes(repo: dict) -> list[str]:
+    """Notes worth showing. 'no upstream' is suppressed — nearly every repo
+    has it, so it's noise; genuinely useful notes (e.g. detached HEAD) stay.
+    """
+    return [n for n in repo.get("notes", []) if n != "no upstream"]
+
+
+def _clean_session_title(s: dict, limit: int = 60) -> str:
+    """A short, label-like title for a session.
+
+    Prefers Claude's generated title; falls back to the first prompt with any
+    absolute paths stripped, collapsed whitespace, and truncated at a word
+    boundary so it reads as a label rather than a dumped prompt.
+    """
+    raw = (s.get("title") or s.get("first_prompt") or "").strip()
+    if not raw:
+        return "(untitled session)"
+    # Strip absolute paths (e.g. /Users/.../repo) that leak into raw prompts.
+    raw = re.sub(r"/\S+", "", raw)
+    raw = " ".join(raw.split())
+    if not raw:
+        return "(untitled session)"
+    if len(raw) <= limit:
+        return raw
+    cut = raw[:limit].rsplit(" ", 1)[0] or raw[:limit]
+    return cut + "…"
+
+
+def _group_sessions(sessions: list[dict]) -> list[dict]:
+    """Drop trivial sessions and group the rest by project.
+
+    Trivial = no tool use at all (pure chat like "Hi") — nothing was explored
+    or built, so it has no place in a work recap. Returns a list of
+    {project, count, titles[up to 3]} sorted by session count desc.
+    """
+    by_project: dict[str, dict] = {}
+    for s in sessions:
+        if not s.get("tools"):
+            continue
+        proj = s.get("project") or "unknown"
+        g = by_project.setdefault(proj, {"project": proj, "count": 0, "titles": []})
+        g["count"] += 1
+        if len(g["titles"]) < 3:
+            g["titles"].append(_clean_session_title(s))
+    return sorted(by_project.values(), key=lambda g: g["count"], reverse=True)
+
+
+def _hidden_summary(idle: int, skipped: int) -> str:
+    """One-line note of repos hidden from the body, or '' if none.
+
+    Kept so nothing is silently dropped — the counts stay visible even
+    though the empty rows don't.
+    """
+    bits = []
+    if idle:
+        bits.append(f"{idle} idle (no work in window)")
+    if skipped:
+        bits.append(f"{skipped} not a git repo")
+    return f"{' · '.join(bits)} — hidden" if bits else ""
+
+
 def _repo_status(repo: dict) -> tuple[str, str]:
     """(label, level) badge for a repo's state."""
     if repo.get("skipped"):
@@ -225,14 +308,20 @@ def build_plain_body(data: dict) -> str:
         "-" * 52,
     ]
     any_repo = False
+    hidden_idle = 0
+    hidden_skipped = 0
     for r in data["repos"]:
         if r.get("skipped"):
-            L.append(f"  ⚪ {r['name']}: skipped ({r['skipped']})")
+            hidden_skipped += 1
+            continue
+        if not repo_has_updates(r):
+            hidden_idle += 1
             continue
         any_repo = True
         label, level = _repo_status(r)
         d = r["dirty"]
-        notes = f"  [{', '.join(r['notes'])}]" if r["notes"] else ""
+        vn = _visible_notes(r)
+        notes = f"  [{', '.join(vn)}]" if vn else ""
         L.append(
             f"  {_EMOJI.get(level, '•')} {r['name']} ({r['branch'] or '—'}) — "
             f"{len(r['finished'])} commit(s), {r['unpushed']} unpushed, "
@@ -244,23 +333,26 @@ def build_plain_body(data: dict) -> str:
         if len(r["finished"]) > 10:
             L.append(f"        … and {len(r['finished']) - 10} more")
     if not any_repo:
-        L.append("  (no usable repos scanned)")
+        L.append("  (nothing touched in this window)")
+    hidden = _hidden_summary(hidden_idle, hidden_skipped)
+    if hidden:
+        L.append(f"  ⋯ {hidden}")
 
     sess = data["sessions"]
     L += ["", "EXPLORED (Claude Code sessions)", "-" * 52]
     if not sess["available"]:
         L.append(f"  (skipped: {sess['skipped']})")
-    elif not sess["sessions"]:
-        L.append("  (no sessions in this window)")
     else:
-        for s in sess["sessions"][:15]:
-            title = s["title"] or s["first_prompt"] or "(untitled session)"
-            L.append(
-                f"  🔵 {s['project']}: {title}  "
-                f"({s['prompts']} prompt(s), {s['tools']} tool use(s))"
-            )
-        if len(sess["sessions"]) > 15:
-            L.append(f"  … and {len(sess['sessions']) - 15} more session(s)")
+        groups = _group_sessions(sess["sessions"])
+        if not groups:
+            L.append("  (no substantive sessions in this window)")
+        else:
+            for g in groups:
+                L.append(f"  🔵 {g['project']} — {g['count']} session(s)")
+                for title in g["titles"]:
+                    L.append(f"        · {title}")
+                if g["count"] > len(g["titles"]):
+                    L.append(f"        … +{g['count'] - len(g['titles'])} more")
 
     L += ["", "─" * 52, "🤖 Auto-generated by WorkWatch recap"]
     return "\n".join(L)
@@ -289,19 +381,25 @@ def build_html_body(data: dict) -> str:
     )
 
     repo_rows = []
+    hidden_idle = 0
+    hidden_skipped = 0
     for r in data["repos"]:
-        label, level = _repo_status(r)
         if r.get("skipped"):
-            detail = _esc(r["skipped"])
-        else:
-            d = r["dirty"]
-            detail = (f'{len(r["finished"])} commit(s), {r["unpushed"]} unpushed, '
-                      f'{d["staged"]}S/{d["modified"]}M/{d["untracked"]}U, '
-                      f'{r["stashes"]} stash(es)')
-            if r["notes"]:
-                detail += f' · <span style="color:#888;">{_esc(", ".join(r["notes"]))}</span>'
+            hidden_skipped += 1
+            continue
+        if not repo_has_updates(r):
+            hidden_idle += 1
+            continue
+        label, level = _repo_status(r)
+        d = r["dirty"]
+        detail = (f'{len(r["finished"])} commit(s), {r["unpushed"]} unpushed, '
+                  f'{d["staged"]}S/{d["modified"]}M/{d["untracked"]}U, '
+                  f'{r["stashes"]} stash(es)')
+        vn = _visible_notes(r)
+        if vn:
+            detail += f' · <span style="color:#888;">{_esc(", ".join(vn))}</span>'
         commits = ""
-        if not r.get("skipped") and r["finished"]:
+        if r["finished"]:
             items = "".join(
                 f'<li style="color:#444;font-size:13px;">{_esc(subj)} '
                 f'<span style="color:#999;">({h})</span></li>'
@@ -319,25 +417,34 @@ def build_html_body(data: dict) -> str:
             f'{commits}</div>'
         )
 
+    hidden = _hidden_summary(hidden_idle, hidden_skipped)
+    hidden_html = (f'<div style="color:#aaa;font-size:12px;margin-top:8px;">⋯ {_esc(hidden)}</div>'
+                   if hidden else "")
+
     sess = data["sessions"]
     if not sess["available"]:
         sess_html = f'<div style="color:#999;">skipped: {_esc(sess["skipped"] or "")}</div>'
-    elif not sess["sessions"]:
-        sess_html = '<div style="color:#999;">no sessions in this window</div>'
     else:
-        rows = []
-        for s in sess["sessions"][:15]:
-            title = _esc(s["title"] or s["first_prompt"] or "(untitled session)")
-            rows.append(
-                '<div style="padding:8px 0;border-bottom:1px solid #f3f5f8;">'
-                f'{_html_badge("session", "info")}'
-                f'<b style="margin-left:10px;">{_esc(s["project"])}</b>: {title}'
-                f'<span style="color:#999;font-size:12px;"> '
-                f'({s["prompts"]} prompt(s), {s["tools"]} tool use(s))</span></div>'
-            )
-        extra = (f'<div style="color:#999;">… {len(sess["sessions"]) - 15} more</div>'
-                 if len(sess["sessions"]) > 15 else "")
-        sess_html = "".join(rows) + extra
+        groups = _group_sessions(sess["sessions"])
+        if not groups:
+            sess_html = '<div style="color:#999;">no substantive sessions in this window</div>'
+        else:
+            rows = []
+            for g in groups:
+                titles = "".join(
+                    f'<li style="color:#444;font-size:13px;">{_esc(tt)}</li>'
+                    for tt in g["titles"]
+                )
+                more = (f'<li style="color:#999;">… +{g["count"] - len(g["titles"])} more</li>'
+                        if g["count"] > len(g["titles"]) else "")
+                rows.append(
+                    '<div style="padding:8px 0;border-bottom:1px solid #f3f5f8;">'
+                    f'{_html_badge("session", "info")}'
+                    f'<b style="margin-left:10px;">{_esc(g["project"])}</b>'
+                    f'<span style="color:#999;font-size:12px;"> — {g["count"]} session(s)</span>'
+                    f'<ul style="margin:6px 0 0 0;padding-left:20px;">{titles}{more}</ul></div>'
+                )
+            sess_html = "".join(rows)
 
     return f'''<!DOCTYPE html><html><body style="margin:0;padding:24px;background:#f6f8fb;
 font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1b1b1b;">
@@ -355,7 +462,8 @@ padding:28px;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
 
   <h3 style="margin:0 0 4px 0;font-size:14px;color:#333;letter-spacing:0.04em;
 text-transform:uppercase;">Shipped &amp; in progress</h3>
-  {''.join(repo_rows) or '<div style="color:#999;">no usable repos scanned</div>'}
+  {''.join(repo_rows) or '<div style="color:#999;">nothing touched in this window</div>'}
+  {hidden_html}
 
   <h3 style="margin:24px 0 4px 0;font-size:14px;color:#333;letter-spacing:0.04em;
 text-transform:uppercase;">Explored</h3>
