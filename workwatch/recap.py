@@ -89,7 +89,6 @@ def build_recap(window: str, repos: list[str], author: str = "",
     usable = [r for r in repo_data if not r.get("skipped")]
     total_commits = sum(len(r["finished"]) for r in usable)
     total_unpushed = sum(r["unpushed"] for r in usable)
-    total_stashes = sum(r["stashes"] for r in usable)
     dirty_repos = [r for r in usable if repo_is_dirty(r)]
     repos_with_commits = [r for r in usable if r["finished"]]
 
@@ -103,7 +102,6 @@ def build_recap(window: str, repos: list[str], author: str = "",
         "totals": {
             "commits": total_commits,
             "unpushed": total_unpushed,
-            "stashes": total_stashes,
             "dirty_repos": len(dirty_repos),
             "repos_touched": len(repos_with_commits) + len(dirty_repos),
             "repos_scanned": len(repo_data),
@@ -140,12 +138,6 @@ def rule_based_verdict(data: dict) -> list[dict]:
             "level": "warn",
             "text": (f"{t['unpushed']} commit(s) never left your laptop. "
                      f"They don't exist until they're pushed."),
-        })
-
-    if t["stashes"] > 3:
-        lines.append({
-            "level": "warn",
-            "text": f"{t['stashes']} stashes rotting. Resolve them or delete them.",
         })
 
     # Focus check: all commits landed in one repo while others sat dirty/stale.
@@ -307,8 +299,7 @@ def build_plain_body(data: dict, full: bool = False) -> str:
         "AT A GLANCE",
         "-" * 52,
         f"  Commits: {t['commits']}   Unpushed: {t['unpushed']}   "
-        f"Dirty repos: {t['dirty_repos']}   Stashes: {t['stashes']}   "
-        f"Sessions: {t['sessions']}",
+        f"Dirty repos: {t['dirty_repos']}   Sessions: {t['sessions']}",
         "",
         "SHIPPED & IN PROGRESS",
         "-" * 52,
@@ -331,8 +322,7 @@ def build_plain_body(data: dict, full: bool = False) -> str:
         L.append(
             f"  {_EMOJI.get(level, '•')} {r['name']} ({r['branch'] or '—'}) — "
             f"{len(r['finished'])} commit(s), {r['unpushed']} unpushed, "
-            f"{d['staged']}S/{d['modified']}M/{d['untracked']}U, "
-            f"{r['stashes']} stash(es){notes}"
+            f"{d['staged']}S/{d['modified']}M/{d['untracked']}U{notes}"
         )
         commits = r["finished"] if full else r["finished"][:10]
         for h, ts, subj in commits:
@@ -388,8 +378,7 @@ def build_html_body(data: dict, full: bool = False) -> str:
 
     glance = (
         f'Commits <b>{t["commits"]}</b> · Unpushed <b>{t["unpushed"]}</b> · '
-        f'Dirty repos <b>{t["dirty_repos"]}</b> · Stashes <b>{t["stashes"]}</b> · '
-        f'Sessions <b>{t["sessions"]}</b>'
+        f'Dirty repos <b>{t["dirty_repos"]}</b> · Sessions <b>{t["sessions"]}</b>'
     )
 
     repo_rows = []
@@ -405,8 +394,7 @@ def build_html_body(data: dict, full: bool = False) -> str:
         label, level = _repo_status(r)
         d = r["dirty"]
         detail = (f'{len(r["finished"])} commit(s), {r["unpushed"]} unpushed, '
-                  f'{d["staged"]}S/{d["modified"]}M/{d["untracked"]}U, '
-                  f'{r["stashes"]} stash(es)')
+                  f'{d["staged"]}S/{d["modified"]}M/{d["untracked"]}U')
         vn = _visible_notes(r)
         if vn:
             detail += f' · <span style="color:#888;">{_esc(", ".join(vn))}</span>'
