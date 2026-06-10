@@ -362,6 +362,7 @@ def cmd_recap(args: list[str]):
     include_claude = config.get("recap_include_claude", True)
     repos: list[str] = []
     dry_run = False
+    full = False
 
     i = 0
     while i < len(args):
@@ -380,6 +381,10 @@ def cmd_recap(args: list[str]):
             continue
         if a == "--no-claude":
             include_claude = False
+            i += 1
+            continue
+        if a in ("--full", "--all"):
+            full = True
             i += 1
             continue
         if not a.startswith("-"):
@@ -408,7 +413,7 @@ def cmd_recap(args: list[str]):
         print(f"\n  \033[1;36m⏱  Building recap (last {window}) → {email}\033[0m")
 
     ok, msg = run_recap(window, repos, author, email,
-                        dry_run=dry_run, include_claude=include_claude)
+                        dry_run=dry_run, include_claude=include_claude, full=full)
     if not ok:
         print(f"\n  \033[1;31m❌ {msg}\033[0m\n")
         sys.exit(1)
@@ -442,9 +447,12 @@ def cmd_help():
   workwatch archive      Email + delete last month's records
   workwatch archive --month YYYY-MM [--email addr] [--dry-run]
                          Archive a specific month (or preview)
-  workwatch recap [WINDOW] [--repo DIR] [--email addr] [--dry-run] [--no-claude]
+  workwatch recap [WINDOW] [--repo DIR] [--email addr] [--dry-run]
+                          [--no-claude] [--full]
                          "What I did" summary (git + Claude sessions), emailed.
                          WINDOW: 24h (default), 90m, 7d, 2w, 1mo
+                         --full: list everything (all commits/sessions/idle
+                                 repos), no "+N more" truncation
   workwatch version      Show version
   workwatch help         Show this help message
 

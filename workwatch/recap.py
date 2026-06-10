@@ -192,10 +192,11 @@ def _fmt_time(iso: str | None) -> str:
 def repo_has_updates(repo: dict) -> bool:
     """True if a repo has anything worth showing in the recap body.
 
-    "Worth showing" = activity in the window (commits) or live risk
-    (uncommitted changes, unpushed commits, stashes). Idle repos — and
-    skipped / non-git ones — return False so they're hidden from the mail
-    rather than cluttering it with empty rows.
+    "Worth showing" = activity in the window (commits) or live work
+    (uncommitted changes, unpushed commits). Stashes don't count — a repo
+    with only old stashes and nothing else is not something you worked on.
+    Idle repos — and skipped / non-git ones — return False so they're hidden
+    from the mail rather than cluttering it with empty rows.
     """
     if repo.get("skipped"):
         return False
@@ -203,7 +204,6 @@ def repo_has_updates(repo: dict) -> bool:
         repo["finished"]
         or repo_is_dirty(repo)
         or repo["unpushed"]
-        or repo["stashes"]
     )
 
 
@@ -235,12 +235,13 @@ def _clean_session_title(s: dict, limit: int = 60) -> str:
     return cut + "…"
 
 
-def _group_sessions(sessions: list[dict]) -> list[dict]:
+def _group_sessions(sessions: list[dict], title_limit: int | None = 3) -> list[dict]:
     """Drop trivial sessions and group the rest by project.
 
     Trivial = no tool use at all (pure chat like "Hi") — nothing was explored
     or built, so it has no place in a work recap. Returns a list of
-    {project, count, titles[up to 3]} sorted by session count desc.
+    {project, count, titles} sorted by session count desc. `title_limit` caps
+    titles per group (None = keep all, for --full).
     """
     by_project: dict[str, dict] = {}
     for s in sessions:
@@ -249,7 +250,7 @@ def _group_sessions(sessions: list[dict]) -> list[dict]:
         proj = s.get("project") or "unknown"
         g = by_project.setdefault(proj, {"project": proj, "count": 0, "titles": []})
         g["count"] += 1
-        if len(g["titles"]) < 3:
+        if title_limit is None or len(g["titles"]) < title_limit:
             g["titles"].append(_clean_session_title(s))
     return sorted(by_project.values(), key=lambda g: g["count"], reverse=True)
 
@@ -287,7 +288,7 @@ def _repo_status(repo: dict) -> tuple[str, str]:
 
 # ---------- plain-text renderer ----------
 
-def build_plain_body(data: dict) -> str:
+def build_plain_body(data: dict, full: bool = False) -> str:
     t = data["totals"]
     win = data["window"]
     L = [
@@ -319,7 +320,7 @@ def build_plain_body(data: dict) -> str:
         if r.get("skipped"):
             hidden_skipped += 1
             continue
-        if not repo_has_updates(r):
+        if not full and not repo_has_updates(r):
             hidden_idle += 1
             continue
         any_repo = True
@@ -333,9 +334,10 @@ def build_plain_body(data: dict) -> str:
             f"{d['staged']}S/{d['modified']}M/{d['untracked']}U, "
             f"{r['stashes']} stash(es){notes}"
         )
-        for h, ts, subj in r["finished"][:10]:
+        commits = r["finished"] if full else r["finished"][:10]
+        for h, ts, subj in commits:
             L.append(f"        · {subj}  ({h})")
-        if len(r["finished"]) > 10:
+        if not full and len(r["finished"]) > 10:
             L.append(f"        … and {len(r['finished']) - 10} more")
     if not any_repo:
         L.append("  (nothing touched in this window)")
@@ -348,11 +350,12 @@ def build_plain_body(data: dict) -> str:
     if not sess["available"]:
         L.append(f"  (skipped: {sess['skipped']})")
     else:
-        groups = _group_sessions(sess["sessions"])
+        groups = _group_sessions(sess["sessions"], title_limit=None if full else 3)
         if not groups:
             L.append("  (no substantive sessions in this window)")
         else:
-            shown, tail = groups[:MAX_SESSION_GROUPS], groups[MAX_SESSION_GROUPS:]
+            shown = groups if full else groups[:MAX_SESSION_GROUPS]
+            tail = [] if full else groups[MAX_SESSION_GROUPS:]
             for g in shown:
                 L.append(f"  🔵 {g['project']} — {g['count']} session(s)")
                 for title in g["titles"]:
@@ -373,7 +376,7 @@ def _esc(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
-def build_html_body(data: dict) -> str:
+def build_html_body(data: dict, full: bool = False) -> str:
     t = data["totals"]
     win = data["window"]
 
@@ -396,7 +399,7 @@ def build_html_body(data: dict) -> str:
         if r.get("skipped"):
             hidden_skipped += 1
             continue
-        if not repo_has_updates(r):
+        if not full and not repo_has_updates(r):
             hidden_idle += 1
             continue
         label, level = _repo_status(r)
@@ -409,13 +412,14 @@ def build_html_body(data: dict) -> str:
             detail += f' · <span style="color:#888;">{_esc(", ".join(vn))}</span>'
         commits = ""
         if r["finished"]:
+            shown_commits = r["finished"] if full else r["finished"][:10]
             items = "".join(
                 f'<li style="color:#444;font-size:13px;">{_esc(subj)} '
                 f'<span style="color:#999;">({h})</span></li>'
-                for h, ts, subj in r["finished"][:10]
+                for h, ts, subj in shown_commits
             )
             more = (f'<li style="color:#999;">… {len(r["finished"]) - 10} more</li>'
-                    if len(r["finished"]) > 10 else "")
+                    if not full and len(r["finished"]) > 10 else "")
             commits = f'<ul style="margin:6px 0 0 0;padding-left:20px;">{items}{more}</ul>'
         repo_rows.append(
             '<div style="padding:12px 0;border-bottom:1px solid #eef1f5;">'
@@ -434,11 +438,12 @@ def build_html_body(data: dict) -> str:
     if not sess["available"]:
         sess_html = f'<div style="color:#999;">skipped: {_esc(sess["skipped"] or "")}</div>'
     else:
-        groups = _group_sessions(sess["sessions"])
+        groups = _group_sessions(sess["sessions"], title_limit=None if full else 3)
         if not groups:
             sess_html = '<div style="color:#999;">no substantive sessions in this window</div>'
         else:
-            shown, tail = groups[:MAX_SESSION_GROUPS], groups[MAX_SESSION_GROUPS:]
+            shown = groups if full else groups[:MAX_SESSION_GROUPS]
+            tail = [] if full else groups[MAX_SESSION_GROUPS:]
             rows = []
             for g in shown:
                 titles = "".join(
@@ -503,8 +508,13 @@ def _write_backup(data: dict, html_body: str) -> Path:
 # ---------- orchestrator ----------
 
 def run_recap(window: str, repos: list[str], author: str, to_email: str,
-              dry_run: bool = False, include_claude: bool = True) -> tuple[bool, str]:
+              dry_run: bool = False, include_claude: bool = True,
+              full: bool = False) -> tuple[bool, str]:
     """Build the recap and either print (dry-run) or email it.
+
+    `full` lifts all truncation (every commit, every session group/title,
+    and idle repos) — handy for the terminal preview when you want the
+    complete picture instead of the trimmed mail view.
 
     Returns (ok, message). For dry_run, message is the plain-text body.
     """
@@ -513,11 +523,11 @@ def run_recap(window: str, repos: list[str], author: str, to_email: str,
     except WindowError as exc:
         return False, str(exc)
 
-    plain = build_plain_body(data)
+    plain = build_plain_body(data, full=full)
     if dry_run:
         return True, plain
 
-    html = build_html_body(data)
+    html = build_html_body(data, full=full)
     subject = (f"WorkWatch Recap — last {data['window']} "
                f"({data['totals']['commits']} commits)")
 
