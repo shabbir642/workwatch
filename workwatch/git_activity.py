@@ -68,7 +68,6 @@ def collect_repo(repo: str, since: str, author: str = "") -> dict:
         "finished": [],          # list of (hash, iso_time, subject)
         "unpushed": 0,
         "dirty": {"staged": 0, "modified": 0, "untracked": 0},
-        "stashes": 0,
         "skipped": None,         # reason string if unusable
         "notes": [],             # non-fatal notes (e.g. "no upstream")
     }
@@ -126,11 +125,6 @@ def collect_repo(repo: str, since: str, author: str = "") -> dict:
                 if y != " ":
                     modified += 1
         base["dirty"] = {"staged": staged, "modified": modified, "untracked": untracked}
-
-    # Stashes
-    ok, out = _git(repo, ["stash", "list"])
-    if ok:
-        base["stashes"] = len([l for l in out.splitlines() if l.strip()])
 
     return base
 
