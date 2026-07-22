@@ -114,6 +114,28 @@ workwatch stop     # stop the daemon
 
 Logs: `~/.workwatch.log` &nbsp;|&nbsp; PID file: `~/.workwatch.pid`
 
+### Run Automatically (Auto-start)
+
+So you never have to launch it by hand, install a macOS **LaunchAgent**:
+
+```bash
+workwatch install-agent     # set it up
+workwatch uninstall-agent   # remove it
+```
+
+This starts the daemon `--bg`:
+
+- **Mon–Fri at 8:00 AM**, and
+- **at every login/boot** — so a day the Mac was off at 8 AM is still covered when you next turn it on.
+
+Once started, the daemon polls every 5 minutes until your attendance mail arrives, then schedules sleep. Safe by design:
+
+- **No re-sleep after clock-out** — if the day's already recorded, a relaunch exits immediately (no accidental second sleep).
+- **Leave / holiday days** — if no attendance mail has arrived by `give_up_after` (default `16:00`, set in `~/.workwatch.json`), the daemon stands down instead of polling all day.
+- **Half-days** — auto-detected from your entry time (≥ 2 PM → `half_day_hours`); nothing extra to configure.
+
+Startup output goes to `~/.workwatch.launchd.log`.
+
 ### Monthly Attendance Log
 
 ```bash
@@ -159,6 +181,8 @@ Schedule via cron to run automatically on the 1st of each month:
 | `workwatch --bg` | Start background daemon |
 | `workwatch status` | Show daemon status with live countdown |
 | `workwatch stop` | Stop background daemon |
+| `workwatch install-agent` | Auto-start daemon on workdays (Mon–Fri 8 AM + login) |
+| `workwatch uninstall-agent` | Remove the auto-start LaunchAgent |
 | `workwatch log` | Show current month's attendance log |
 | `workwatch log --month YYYY-MM` | Show log for a specific month |
 | `workwatch archive` | Email last month's records + analytics to `archive_email`, then delete |
