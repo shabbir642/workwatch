@@ -426,6 +426,37 @@ def cmd_recap(args: list[str]):
     print(f"  \033[1;32m✅ {msg}\033[0m\n")
 
 
+def cmd_install_agent():
+    """Install the launchd agent so the daemon auto-starts on workdays."""
+    from workwatch.launch_agent import (
+        install, PLIST_PATH, START_HOUR, START_MINUTE,
+    )
+
+    ok, info = install()
+    if not ok:
+        print(f"\n  \033[1;31m❌ {info}\033[0m\n")
+        sys.exit(1)
+
+    when = f"{START_HOUR:02d}:{START_MINUTE:02d}"
+    print(f"\n  \033[1;32m✅ Auto-start installed.\033[0m")
+    print(f"  \033[0;90mBinary:\033[0m   {info}")
+    print(f"  \033[0;90mSchedule:\033[0m Mon–Fri at {when}, plus every login/boot")
+    print(f"  \033[0;90mPlist:\033[0m    {PLIST_PATH}")
+    print(f"\n  \033[0;90mThe daemon will now start itself each workday and wait for")
+    print(f"  your attendance mail. Remove with: workwatch uninstall-agent\033[0m\n")
+
+
+def cmd_uninstall_agent():
+    """Remove the launchd auto-start agent."""
+    from workwatch.launch_agent import uninstall
+
+    ok, info = uninstall()
+    if ok:
+        print(f"\n  \033[1;32m✅ Auto-start removed.\033[0m \033[0;90m({info})\033[0m\n")
+    else:
+        print(f"\n  \033[0;90m{info}\033[0m\n")
+
+
 def cmd_version():
     """Show version."""
     print(f"WorkWatch v{VERSION}")
@@ -453,12 +484,21 @@ def cmd_help():
                          WINDOW: 24h (default), 90m, 7d, 2w, 1mo
                          --full: list everything (all commits/sessions/idle
                                  repos), no "+N more" truncation
+  workwatch install-agent
+                         Auto-start the daemon on workdays (Mon–Fri 8 AM
+                         + every login) via a macOS LaunchAgent
+  workwatch uninstall-agent
+                         Remove the auto-start LaunchAgent
   workwatch version      Show version
   workwatch help         Show this help message
 
 \033[1;37mBackground mode:\033[0m
   Runs silently, sends macOS notifications, sleeps Mac when done.
   Log: ~/.workwatch.log | PID: ~/.workwatch.pid
+
+\033[1;37mAuto-start:\033[0m
+  workwatch install-agent   → runs itself each workday, no terminal needed
+  Give-up time for leave days: 'give_up_after' in ~/.workwatch.json
 
 \033[1;37mConfig:\033[0m
   ~/.workwatch.json      Edit work_hours and sender email
@@ -487,6 +527,10 @@ def main():
         cmd_archive(args[1:])
     elif args[0] == "recap":
         cmd_recap(args[1:])
+    elif args[0] == "install-agent":
+        cmd_install_agent()
+    elif args[0] == "uninstall-agent":
+        cmd_uninstall_agent()
     elif args[0] == "version":
         cmd_version()
     elif args[0] in ("help", "--help", "-h"):

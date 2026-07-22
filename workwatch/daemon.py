@@ -204,6 +204,31 @@ def _save_record(entry_time: datetime, exit_time: datetime, hours_worked: float)
     logging.info("Attendance record saved.")
 
 
+def _completed_today() -> bool:
+    """True if today's attendance is already recorded (sleep already fired).
+
+    Guards against a re-launch (e.g. launchd `RunAtLoad` on a later login)
+    scheduling a second sleep for a day that's already been handled.
+    """
+    history = load_history()
+    key = datetime.now().strftime("%Y-%m-%d")
+    record = history.get(key)
+    return bool(record and record.get("exit_time"))
+
+
+def _give_up_time(config: dict):
+    """Parse `give_up_after` ("HH:MM") into today's datetime, or None."""
+    raw = config.get("give_up_after", "")
+    if not raw:
+        return None
+    try:
+        hour, minute = (int(part) for part in str(raw).split(":"))
+        return datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except (ValueError, TypeError):
+        logging.warning("Invalid give_up_after %r; ignoring cutoff.", raw)
+        return None
+
+
 def _run_daemon():
     """Main daemon loop — runs in the forked background process."""
     _setup_logging()
@@ -213,16 +238,35 @@ def _run_daemon():
     signal.signal(signal.SIGINT, _handle_signal)
 
     logging.info("WorkWatch daemon started (PID %d).", os.getpid())
-    _write_state("waiting")
 
     config = load_config()
     sender = config["sender"]
 
-    # Phase 1: Find the attendance email
+    # Idempotency guard: if today is already done, do nothing. Keeps an
+    # auto-start relaunch from re-sleeping a Mac that already clocked out.
+    if _completed_today():
+        logging.info("Today's attendance already recorded; nothing to do. Exiting.")
+        _remove_pid()
+        return
+
+    _write_state("waiting")
+
+    # Phase 1: Find the attendance email (giving up past the configured cutoff
+    # so leave/holiday days don't leave the daemon polling forever).
+    give_up_at = _give_up_time(config)
     retry_count = 0
     entry_time = None
 
     while entry_time is None:
+        if give_up_at is not None and datetime.now() >= give_up_at:
+            logging.info(
+                "No attendance email by %s — standing down (leave/holiday?).",
+                give_up_at.strftime("%I:%M %p"),
+            )
+            _notify("WorkWatch", "No attendance email today — standing down.")
+            _remove_pid()
+            return
+
         success, data = fetch_today_emails(sender)
 
         if not success:

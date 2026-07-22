@@ -15,6 +15,8 @@ DEFAULT_CONFIG = {
     "sender": "attendance@vmock.com",
     "overtime_enabled": True,
     "inactive_threshold_minutes": 10,
+    "give_up_after": "16:00",     # stop waiting for the attendance mail past
+                                  # this local time (leave/holiday) and exit
     "archive_email": "",
     # `recap` command settings ----------------------------------------
     "recap_repos": [],            # explicit dirs to scan (do NOT auto-scan $HOME)
