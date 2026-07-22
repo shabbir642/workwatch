@@ -10,6 +10,12 @@ DELIMITER = "|||WORKWATCH_SEP|||"
 def _build_applescript(sender: str) -> str:
     """Build AppleScript to fetch today's emails from the given sender.
 
+    Searches the unified inbox as well as any archive-style mailbox across
+    accounts. Gmail's "Archive" action simply removes the Inbox label and
+    leaves the message in "All Mail", so archived attendance mails would be
+    missed if we only looked at the inbox. Messages are de-duplicated by
+    message id (the same mail can appear in both the inbox and "All Mail").
+
     Uses Mail.app's native `whose` filtering on date received to avoid
     iterating through the entire mailbox.
     """
@@ -31,15 +37,37 @@ tell application "Mail"
 
     set tomorrowStart to todayStart + (1 * days)
 
-    -- Let Mail.app filter by both sender AND date natively
-    set todayMessages to (messages of inbox whose sender contains "{sender}" and date received >= todayStart and date received < tomorrowStart)
+    -- Collect candidate message lists from the unified inbox and any
+    -- archive-style mailbox (Gmail archives into "All Mail"). Mail.app
+    -- filters each set by sender AND date natively.
+    set msgSets to {{}}
+    try
+        set end of msgSets to (messages of inbox whose sender contains "{sender}" and date received >= todayStart and date received < tomorrowStart)
+    end try
+    repeat with acct in accounts
+        repeat with mb in mailboxes of acct
+            set mbName to name of mb
+            if (mbName contains "All Mail") or (mbName contains "Archive") then
+                try
+                    set end of msgSets to (messages of mb whose sender contains "{sender}" and date received >= todayStart and date received < tomorrowStart)
+                end try
+            end if
+        end repeat
+    end repeat
 
     set resultBodies to {{}}
-    repeat with msg in todayMessages
-        set msgContent to content of msg
-        if msgContent contains "Entry Allowed" then
-            set end of resultBodies to msgContent
-        end if
+    set seenIds to {{}}
+    repeat with msgs in msgSets
+        repeat with msg in msgs
+            set mid to (message id of msg)
+            if seenIds does not contain mid then
+                set end of seenIds to mid
+                set msgContent to content of msg
+                if msgContent contains "Entry Allowed" then
+                    set end of resultBodies to msgContent
+                end if
+            end if
+        end repeat
     end repeat
 
     if (count of resultBodies) = 0 then
