@@ -23,6 +23,7 @@ PID_FILE = Path.home() / ".workwatch.pid"
 LOG_FILE = Path.home() / ".workwatch.log"
 STATE_FILE = Path.home() / ".workwatch_state.json"
 RETRY_INTERVAL = 300  # 5 minutes
+GRACE_SECONDS = 30 * 60  # only force-sleep if within 30 min of the sleep mark
 
 
 def _put_to_sleep():
@@ -192,7 +193,9 @@ def daemonize():
 def _save_record(entry_time: datetime, exit_time: datetime, hours_worked: float):
     """Save today's attendance record to history."""
     history = load_history()
-    date_key = datetime.now().strftime("%Y-%m-%d")
+    # Key by the ENTRY date, not now(): a late entry whose hours cross midnight
+    # must still be filed under the day it started.
+    date_key = entry_time.strftime("%Y-%m-%d")
 
     history[date_key] = {
         "entry_time": entry_time.strftime("%I:%M:%S %p"),
@@ -309,14 +312,21 @@ def _run_daemon():
         f"Entry: {entry_str} | Sleep at: {sleep_str}"
     )
 
-    # Already past sleep time?
+    # Already past sleep time when we got here (started late / woke up later).
     if now >= sleep_time:
-        elapsed_hours = (now - entry_time).total_seconds() / 3600
-        logging.warning("Already past sleep time! Worked %.1f hours.", elapsed_hours)
-        _notify("WorkWatch", f"Already past {sleep_str}! Sleeping now...")
-        _save_record(entry_time, now, elapsed_hours)
-        time.sleep(2)
-        _put_to_sleep()
+        past_seconds = (now - sleep_time).total_seconds()
+        logging.info("Started past the %s mark (by %.0f min).", sleep_str, past_seconds / 60)
+        # Always record the exact end (entry + work_hours), never `now`.
+        _save_record(entry_time, sleep_time, work_hours)
+        if past_seconds <= GRACE_SECONDS:
+            _notify("WorkWatch", f"Past {sleep_str} — sleeping now...")
+            time.sleep(2)
+            _put_to_sleep()
+        else:
+            # Long past the mark — don't sleep a machine that's just been
+            # opened; the day is already logged.
+            logging.info("Well past sleep mark; logged only, not sleeping.")
+            _notify("WorkWatch", f"Logged today's hours (ended {sleep_str}).")
         _remove_pid()
         return
 
@@ -334,10 +344,16 @@ def _run_daemon():
 
         time.sleep(min(30, remaining))
 
-    # Countdown complete — enter overtime phase if enabled
+    # Countdown complete.
     logging.info("Countdown complete.")
 
-    if config.get("overtime_enabled", True):
+    # --- Optional extra feature (OFF by default): overtime tracking ---------
+    # Kept in the codebase but not triggered. Instead of sleeping at the exact
+    # entry + work_hours mark, this keeps tracking active time and ends the day
+    # after `inactive_threshold_minutes` of inactivity. It is unreliable when
+    # the Mac sleeps (the idle probe can't observe sleep), so it is disabled in
+    # favour of the exact-hours model. Re-enable via "overtime_enabled": true.
+    if config.get("overtime_enabled", False):
         threshold_min = float(config.get("inactive_threshold_minutes", 10))
         _notify("WorkWatch", "Work hours done. Tracking overtime while you're active...")
         _write_state("overtime", entry_time, sleep_time,

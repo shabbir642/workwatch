@@ -24,6 +24,7 @@ from workwatch.archiver import archive_month, previous_month
 
 
 RETRY_INTERVAL = 300  # 5 minutes
+GRACE_SECONDS = 30 * 60  # only force-sleep if within 30 min of the sleep mark
 
 
 def put_to_sleep():
@@ -112,29 +113,32 @@ def cmd_watch(background: bool = False):
     sleep_time = entry_time + timedelta(hours=work_hours)
     now = datetime.now()
 
-    # Check if already past sleep time
+    # Already past the exact end mark (entry + work_hours)?
     if now >= sleep_time:
-        elapsed = now - entry_time
-        elapsed_hours = elapsed.total_seconds() / 3600
-
         clear_screen()
-        print(f"\n  \033[1;33m⚠ You've already worked {elapsed_hours:.1f} hours!\033[0m")
-        print(f"  🕐 Entry Time: \033[1;32m{format_time_12h(entry_time)}\033[0m")
-        print(f"  🛑 Sleep was due at: \033[1;31m{format_time_12h(sleep_time)}\033[0m")
+        print(f"\n  🕐 Entry Time:  \033[1;32m{format_time_12h(entry_time)}\033[0m")
+        print(f"  🛑 Day ends at: \033[1;31m{format_time_12h(sleep_time)}\033[0m")
         print(f"  ⏰ Current time: \033[1;37m{format_time_12h(now)}\033[0m")
-        print()
-        print(f"  \033[1;31mPutting your Mac to sleep now...\033[0m\n")
 
-        _save_record(entry_time, now, elapsed_hours)
-        time.sleep(2)
-        put_to_sleep()
+        # Record the exact end (entry + work_hours), never `now`.
+        _save_record(entry_time, sleep_time, work_hours)
+
+        if (now - sleep_time).total_seconds() <= GRACE_SECONDS:
+            print(f"\n  \033[1;31mPutting your Mac to sleep now...\033[0m\n")
+            time.sleep(2)
+            put_to_sleep()
+        else:
+            print(f"\n  \033[0;90mWell past the mark — logged today's hours, not sleeping.\033[0m\n")
         return
 
     # Run countdown
     completed = run_countdown(entry_time, sleep_time)
 
     if completed:
-        if config.get("overtime_enabled", True):
+        # --- Optional extra feature (OFF by default): overtime tracking -----
+        # Kept but not triggered; see daemon.py for the rationale. Re-enable
+        # with "overtime_enabled": true. Default: end at entry + work_hours.
+        if config.get("overtime_enabled", False):
             threshold_min = float(config.get("inactive_threshold_minutes", 10))
 
             def _tick(last_active, idle):
@@ -157,7 +161,9 @@ def cmd_watch(background: bool = False):
 def _save_record(entry_time: datetime, exit_time: datetime, hours_worked: float):
     """Save today's attendance record to history."""
     history = load_history()
-    date_key = datetime.now().strftime("%Y-%m-%d")
+    # Key by the ENTRY date, not now(): hours crossing midnight stay on the
+    # day they started.
+    date_key = entry_time.strftime("%Y-%m-%d")
 
     history[date_key] = {
         "entry_time": entry_time.strftime("%I:%M:%S %p"),

@@ -13,9 +13,13 @@ DEFAULT_CONFIG = {
     "work_hours": 9,
     "half_day_hours": 4.5,
     "sender": "attendance@vmock.com",
-    "overtime_enabled": True,
+    # Optional extra feature (OFF by default): instead of sleeping at exactly
+    # entry + work_hours, keep tracking active time and end the day after this
+    # many idle minutes. Kept in the codebase but not triggered — set
+    # overtime_enabled=true to re-enable. See daemon.py / overtime.py.
+    "overtime_enabled": False,
     "inactive_threshold_minutes": 10,
-    "give_up_after": "16:00",     # stop waiting for the attendance mail past
+    "give_up_after": "18:00",     # stop waiting for the attendance mail past
                                   # this local time (leave/holiday) and exit
     "archive_email": "",
     # `recap` command settings ----------------------------------------
