@@ -199,7 +199,8 @@ Config file: `~/.workwatch.json` (auto-created on first run)
   "work_hours": 9,
   "half_day_hours": 4.5,
   "sender": "attendance@vmock.com",
-  "overtime_enabled": true,
+  "give_up_after": "18:00",
+  "overtime_enabled": false,
   "inactive_threshold_minutes": 10
 }
 ```
@@ -209,8 +210,9 @@ Config file: `~/.workwatch.json` (auto-created on first run)
 | `work_hours` | Hours to work before auto-sleep (supports decimals like `8.5`) | `9` |
 | `half_day_hours` | Hours to work when entry is at/after 2:00 PM (half-day) | `4.5` |
 | `sender` | Email address to search for in Mail.app | `attendance@vmock.com` |
-| `overtime_enabled` | After countdown ends, keep tracking while you're active instead of sleeping immediately | `true` |
-| `inactive_threshold_minutes` | Minutes of keyboard/mouse idle that ends overtime and triggers sleep | `10` |
+| `give_up_after` | Stop waiting for the attendance mail past this local time (leave/holiday) and exit | `"18:00"` |
+| `overtime_enabled` | **Optional extra, off by default.** After the mark, keep tracking while you're active instead of sleeping at exactly entry + work_hours. Kept in the code but disabled — unreliable when the Mac sleeps. | `false` |
+| `inactive_threshold_minutes` | Idle minutes that end overtime (only used if `overtime_enabled`) | `10` |
 | `archive_email` | Destination address for `workwatch archive` monthly emails (leave blank to require `--email`) | `""` |
 
 ## Files
@@ -233,11 +235,10 @@ Config file: `~/.workwatch.json` (auto-created on first run)
 4. If multiple entry emails exist, uses the earliest (first check-in)
 5. Calculates sleep time = earliest entry + work hours (uses `half_day_hours` if entry is at/after 2:00 PM, else `work_hours`)
 6. **Foreground**: live terminal countdown &nbsp;|&nbsp; **Background**: silent daemon with macOS notifications
-7. When the countdown hits zero:
-   - If `overtime_enabled` (default): enters overtime tracking — polls the macOS HID idle counter (`ioreg -c IOHIDSystem`) and keeps logging hours while you're active. When keyboard/mouse has been idle for `inactive_threshold_minutes` (default 10), the last-active moment becomes the exit time.
-   - Otherwise: exit time = scheduled sleep time.
-8. Saves the attendance record to `~/.workwatch_history.json` with `hours_worked` = `(exit_time − entry_time)` (base + OT folded in)
-9. Triggers `pmset sleepnow` to put the Mac to sleep
+7. When the countdown hits zero, exit time = the scheduled mark (entry + work_hours). Exit is exactly `work_hours`/`half_day_hours`.
+   - *(Optional, off by default)* if `overtime_enabled` is set, it instead tracks activity via the macOS HID idle counter and ends after `inactive_threshold_minutes` idle. Disabled because it's unreliable when the Mac sleeps.
+8. Saves the attendance record to `~/.workwatch_history.json`, keyed by the **entry date** (so hours crossing midnight stay on the day they started)
+9. Triggers `pmset sleepnow` to put the Mac to sleep. If WorkWatch starts up already past the mark, it records the exact hours and only sleeps if within 30 minutes of the mark (won't sleep a machine you just opened)
 
 ## Building & Releasing
 
